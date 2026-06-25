@@ -1,7 +1,7 @@
 {
   "name": "league-client",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -59,14 +59,13 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     },
-
     "publish": [
-    {
-      "provider": "github",
-      "owner": "Affaan-Ahmad",
-      "repo": "bonk-client",
-      "releaseType": "release"
-    }
-  ]
+      {
+        "provider": "github",
+        "owner": "Affaan-Ahmad",
+        "repo": "bonk-client",
+        "releaseType": "release"
+      }
+    ]
   }
 }
