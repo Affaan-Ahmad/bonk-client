@@ -155,6 +155,51 @@ function getPossibleLeagueClientPaths() {
   ].filter(Boolean);
 }
 
+function getRiotClientPathsFromInstalls() {
+  // Riot writes the canonical RiotClientServices location here. This is the most
+  // reliable source and is what LCU connector tools rely on.
+  try {
+    const programData = process.env.ProgramData ?? "C:\\ProgramData";
+    const installsPath = path.join(programData, "Riot Games", "RiotClientInstalls.json");
+    if (!fs.existsSync(installsPath)) return [];
+    const data = JSON.parse(fs.readFileSync(installsPath, "utf8"));
+    return [data.rc_default, data.rc_live, data.rc_beta].filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function getPossibleRiotClientPaths() {
+  const systemDrive = process.env.SystemDrive ?? "C:";
+  const config = readConfig();
+  const savedLeagueFolder = config.leagueFolderPath;
+  const configuredRiotExe = process.env.RIOT_CLIENT_EXE_PATH;
+  const commonDrives =
+    process.platform === "win32" ? [systemDrive, "C:", "D:", "E:", "F:"] : [systemDrive];
+  const uniqueDrives = [...new Set(commonDrives.filter(Boolean))];
+
+  // If the user picked their League folder (…\Riot Games\League of Legends),
+  // RiotClientServices sits next to it at …\Riot Games\Riot Client\…
+  const derivedFromLeagueFolder = savedLeagueFolder
+    ? path.join(
+        path.dirname(savedLeagueFolder),
+        "Riot Client",
+        "RiotClientServices.exe",
+      )
+    : null;
+
+  return [
+    configuredRiotExe,
+    ...getRiotClientPathsFromInstalls(),
+    derivedFromLeagueFolder,
+    ...uniqueDrives.flatMap((drive) => [
+      path.join(drive, "Riot Games", "Riot Client", "RiotClientServices.exe"),
+      path.join(drive, "Program Files", "Riot Games", "Riot Client", "RiotClientServices.exe"),
+      path.join(drive, "Program Files (x86)", "Riot Games", "Riot Client", "RiotClientServices.exe"),
+    ]),
+  ].filter(Boolean);
+}
+
 async function waitForLeagueConnection(timeoutMs = 45000) {
   const startedAt = Date.now();
 
@@ -185,10 +230,29 @@ async function launchLeagueClient() {
 
   const executableCandidates = getPossibleLeagueClientPaths();
   const executablePath = executableCandidates.find((candidatePath) => fs.existsSync(candidatePath));
+  const riotClientCandidates = getPossibleRiotClientPaths();
+  const riotClientPath = riotClientCandidates.find((candidatePath) => fs.existsSync(candidatePath));
   let launchMethod = "none";
 
   try {
-    if (executablePath) {
+    if (riotClientPath) {
+      // Preferred: modern League must be started via RiotClientServices, not by
+      // launching LeagueClient.exe directly.
+      const child = spawn(
+        riotClientPath,
+        ["--launch-product=league_of_legends", "--launch-patchline=live"],
+        {
+          cwd: path.dirname(riotClientPath),
+          detached: true,
+          stdio: "ignore",
+          windowsHide: false,
+        },
+      );
+
+      child.unref();
+      launchMethod = "riot-client-services";
+    } else if (executablePath) {
+      // Legacy fallback: direct LeagueClient.exe (older installs).
       const child = spawn(executablePath, [], {
         cwd: path.dirname(executablePath),
         detached: true,
@@ -207,6 +271,7 @@ async function launchLeagueClient() {
         status: "not_open",
         message: "League install path not found. Select your League folder first.",
         searchedPaths: executableCandidates,
+        searchedExecutablePaths: [...riotClientCandidates, ...executableCandidates],
         launched: false,
         launchMethod,
       };
@@ -217,6 +282,7 @@ async function launchLeagueClient() {
       status: "not_open",
       message: error instanceof Error ? error.message : "Could not launch League client",
       searchedPaths: executableCandidates,
+      searchedExecutablePaths: [...riotClientCandidates, ...executableCandidates],
       launched: false,
       launchMethod,
     };
@@ -228,11 +294,11 @@ async function launchLeagueClient() {
     ...status,
     launched: true,
     launchMethod,
-    executablePath,
+    executablePath: riotClientPath ?? executablePath,
     message: status.connected
       ? "League client launched and connected"
       : "League launched. Log in or select your League folder if it does not connect.",
-    searchedExecutablePaths: executableCandidates,
+    searchedExecutablePaths: [...riotClientCandidates, ...executableCandidates],
   };
 }
 
@@ -664,6 +730,8 @@ async function getLeagueOverview() {
     runePages,
     currentRunePage,
     perkStyles,
+    summonerSpells,
+    recommendedRunePages,
   ] = await Promise.all([
     lcuFetch("/lol-summoner/v1/current-summoner").catch(() => null),
     lcuFetch("/lol-chat/v1/friends").catch(() => []),
@@ -680,6 +748,8 @@ async function getLeagueOverview() {
     lcuFetch("/lol-perks/v1/pages").catch(() => []),
     lcuFetch("/lol-perks/v1/currentpage").catch(() => null),
     lcuFetch("/lol-perks/v1/styles").catch(() => []),
+    lcuFetch("/lol-game-data/assets/v1/summoner-spells.json").catch(() => []),
+    lcuFetch("/lol-perks/v1/recommended-pages").catch(() => []),
   ]);
 
   return {
@@ -699,6 +769,8 @@ async function getLeagueOverview() {
           runePages: Array.isArray(runePages) ? runePages : [],
           currentRunePage,
           perkStyles: Array.isArray(perkStyles) ? perkStyles : [],
+          summonerSpells: Array.isArray(summonerSpells) ? summonerSpells : [],
+          recommendedRunePages: Array.isArray(recommendedRunePages) ? recommendedRunePages : [],
         }
       : null,
   };
@@ -753,6 +825,28 @@ async function switchLobbyQueue(queueId) {
     method: "DELETE",
   });
   await createLobby(queueId);
+}
+
+async function inviteSummonersToLobby(summonerIds, queueId) {
+  const ids = (Array.isArray(summonerIds) ? summonerIds : [summonerIds])
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value > 0);
+
+  if (ids.length === 0) {
+    throw new Error("No valid summoner IDs to invite");
+  }
+
+  // Inviting requires an active lobby — create one if needed.
+  const lobby = await lcuFetch("/lol-lobby/v2/lobby").catch(() => null);
+  if (!lobby) {
+    const fallbackQueueId = Number(queueId);
+    await createLobby(Number.isInteger(fallbackQueueId) ? fallbackQueueId : 420);
+  }
+
+  await lcuFetch("/lol-lobby/v2/lobby/invitations", {
+    method: "POST",
+    body: ids.map((toSummonerId) => ({ toSummonerId })),
+  });
 }
 
 ipcMain.handle("riot:get-account", async () => {
@@ -824,6 +918,23 @@ ipcMain.handle("league:cancel-matchmaking", async () => {
   return getLeagueOverview();
 });
 
+ipcMain.handle("league:set-role-preferences", async (_event, firstPreference, secondPreference) => {
+  await lcuFetch("/lol-lobby/v2/lobby/members/localMember/position-preferences", {
+    method: "PUT",
+    body: {
+      firstPreference,
+      secondPreference,
+    },
+  });
+
+  return getLeagueOverview();
+});
+
+ipcMain.handle("league:invite-to-lobby", async (_event, summonerIds, queueId) => {
+  await inviteSummonersToLobby(summonerIds, queueId);
+  return getLeagueOverview();
+});
+
 ipcMain.handle("league:champ-select-action", async (_event, actionId, body) => {
   const parsedActionId = Number(actionId);
   const championId = Number(body?.championId);
@@ -881,6 +992,59 @@ ipcMain.handle("league:select-rune-page", async (_event, pageId) => {
       ...page,
       current: true,
     },
+  });
+
+  return getLeagueOverview();
+});
+
+ipcMain.handle("league:set-summoner-spells", async (_event, spell1Id, spell2Id) => {
+  const first = Number(spell1Id);
+  const second = Number(spell2Id);
+
+  if (!Number.isInteger(first) || !Number.isInteger(second)) {
+    throw new Error("Summoner spell IDs must be numbers");
+  }
+
+  await lcuFetch("/lol-champ-select/v1/session/my-selection", {
+    method: "PATCH",
+    body: {
+      spell1Id: first,
+      spell2Id: second,
+    },
+  });
+
+  return getLeagueOverview();
+});
+
+ipcMain.handle("league:apply-rune-page", async (_event, page) => {
+  if (!page || typeof page !== "object") {
+    throw new Error("A rune page is required");
+  }
+
+  // Build a fresh editable page from the recommended/selected one and make it current.
+  const newPage = {
+    name: page.name || "BONK Recommended",
+    primaryStyleId: page.primaryStyleId,
+    subStyleId: page.subStyleId,
+    selectedPerkIds: Array.isArray(page.selectedPerkIds) ? page.selectedPerkIds : [],
+    current: true,
+  };
+
+  // Free a slot if the player is at the page limit by deleting an editable page.
+  const existingPages = await lcuFetch("/lol-perks/v1/pages").catch(() => []);
+  const inventory = await lcuFetch("/lol-perks/v1/inventory").catch(() => null);
+  const maxPages = Number(inventory?.ownedPageCount) || 2;
+
+  if (Array.isArray(existingPages) && existingPages.length >= maxPages) {
+    const deletable = existingPages.find((existing) => existing.isDeletable !== false);
+    if (deletable) {
+      await lcuFetch(`/lol-perks/v1/pages/${deletable.id}`, { method: "DELETE" }).catch(() => {});
+    }
+  }
+
+  await lcuFetch("/lol-perks/v1/pages", {
+    method: "POST",
+    body: newPage,
   });
 
   return getLeagueOverview();

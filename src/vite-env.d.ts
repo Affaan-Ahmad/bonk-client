@@ -51,6 +51,8 @@ type LeagueSummoner = {
 
 type LeagueFriend = {
   id?: string;
+  puuid?: string;
+  summonerId?: number;
   name?: string;
   gameName?: string;
   gameTag?: string;
@@ -180,6 +182,15 @@ type LeaguePerkStyle = {
   tooltip?: string;
 };
 
+type LeagueSummonerSpell = {
+  id: number;
+  name: string;
+  description?: string;
+  summonerLevel?: number;
+  gameModes?: string[];
+  iconPath?: string;
+};
+
 type LeagueChampSelectOverview = {
   session: LeagueChampSelectSession;
   pickableChampionIds: number[];
@@ -188,6 +199,8 @@ type LeagueChampSelectOverview = {
   runePages: LeagueRunePage[];
   currentRunePage: LeagueRunePage | null;
   perkStyles: LeaguePerkStyle[];
+  summonerSpells: LeagueSummonerSpell[];
+  recommendedRunePages: LeagueRunePage[];
 };
 
 type LeagueOverview = {
@@ -220,6 +233,19 @@ interface Window {
       body: { championId?: number; completed?: boolean },
     ) => Promise<LeagueOverview>;
     selectRunePage: (pageId: number) => Promise<LeagueOverview>;
+    setRolePreferences: (
+      firstPreference: string,
+      secondPreference: string,
+    ) => Promise<LeagueOverview>;
+    inviteToLobby: (
+      summonerIds: number | number[],
+      queueId?: number,
+    ) => Promise<LeagueOverview>;
+    setSummonerSpells: (
+      spell1Id: number,
+      spell2Id: number,
+    ) => Promise<LeagueOverview>;
+    applyRunePage: (page: LeagueRunePage) => Promise<LeagueOverview>;
     acceptReadyCheck: () => Promise<LeagueOverview>;
     declineReadyCheck: () => Promise<LeagueOverview>;
     selectLeagueFolder: () => Promise<LeagueClientStatus>;

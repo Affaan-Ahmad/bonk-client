@@ -1,0 +1,225 @@
+@import "tailwindcss";
+@plugin "tailwindcss-animate";
+
+/* Always-dark client. Tokens below are consumed by shadcn/ui primitives. */
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* ----- Brand palette ----- */
+  --bonk-bg: #0a0f0d;
+  --bonk-bg-2: #0d1411;
+  --bonk-panel: rgba(18, 26, 22, 0.72);
+  --bonk-panel-strong: rgba(14, 20, 17, 0.92);
+  --bonk-line: rgba(120, 160, 140, 0.14);
+  --bonk-green: #1db954;
+  --bonk-green-bright: #1ed760;
+  --bonk-green-dim: rgba(29, 185, 84, 0.16);
+  --bonk-gold: #e6c46a;
+  --bonk-violet: #9d7bff;
+  --bonk-teal: #38d9c4;
+  --bonk-blue: #6aa6ff;
+  --bonk-danger: #ff5267;
+  --bonk-text: #eaf2ec;
+  --bonk-muted: #8ea3a0;
+  --bonk-faint: #5d716e;
+
+  /* Runtime-injected by App.tsx. Never a literal protocol URL in CSS. */
+  --scene-splash: none;
+
+  /* ----- shadcn token mapping (dark) ----- */
+  --radius: 0.85rem;
+  --background: var(--bonk-bg);
+  --foreground: var(--bonk-text);
+  --card: rgba(16, 23, 20, 0.86);
+  --card-foreground: var(--bonk-text);
+  --popover: #0e1512;
+  --popover-foreground: var(--bonk-text);
+  --primary: var(--bonk-green);
+  --primary-foreground: #04150b;
+  --secondary: rgba(255, 255, 255, 0.06);
+  --secondary-foreground: var(--bonk-text);
+  --muted: rgba(255, 255, 255, 0.05);
+  --muted-foreground: var(--bonk-muted);
+  --accent: var(--bonk-green-dim);
+  --accent-foreground: var(--bonk-green-bright);
+  --destructive: var(--bonk-danger);
+  --destructive-foreground: #fff;
+  --border: var(--bonk-line);
+  --input: rgba(255, 255, 255, 0.08);
+  --ring: var(--bonk-green);
+
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-bonk-green: var(--bonk-green);
+  --color-bonk-green-bright: var(--bonk-green-bright);
+  --color-bonk-gold: var(--bonk-gold);
+  --color-bonk-violet: var(--bonk-violet);
+  --color-bonk-teal: var(--bonk-teal);
+  --color-bonk-blue: var(--bonk-blue);
+  --color-bonk-danger: var(--bonk-danger);
+  --color-bonk-muted: var(--bonk-muted);
+  --color-bonk-faint: var(--bonk-faint);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-display: "Space Grotesk Variable", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  width: 100%;
+  min-width: 1100px;
+}
+
+body {
+  background: var(--bonk-bg);
+  color: var(--bonk-text);
+  font-family: var(--font-sans);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Drag region for the frameless Electron window top edge. */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* ------------------------------------------------------------------ */
+/* Cinematic scene                                                     */
+/* ------------------------------------------------------------------ */
+
+.bonk-scene {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 80% at 78% 12%, rgba(29, 185, 84, 0.1), transparent 60%),
+    radial-gradient(90% 70% at 12% 90%, rgba(20, 60, 44, 0.35), transparent 65%),
+    linear-gradient(160deg, var(--bonk-bg-2), var(--bonk-bg) 60%);
+}
+
+/* Jax splash backdrop — reads the runtime CSS variable with a `none` fallback. */
+.bonk-scene__splash {
+  position: absolute;
+  inset: -8%;
+  background-image: var(--scene-splash);
+  background-size: cover;
+  background-position: 70% 18%;
+  filter: saturate(0.7) brightness(0.42) blur(2px);
+  opacity: 0.42;
+  mask-image: radial-gradient(120% 90% at 75% 20%, #000 18%, transparent 72%);
+  -webkit-mask-image: radial-gradient(120% 90% at 75% 20%, #000 18%, transparent 72%);
+  animation: bonk-drift 36s ease-in-out infinite alternate;
+}
+
+.bonk-scene__vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(130% 110% at 50% 36%, transparent 40%, rgba(0, 0, 0, 0.72) 100%);
+}
+
+.bonk-scene__glow {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(80px);
+  opacity: 0.5;
+}
+.bonk-scene__glow--a {
+  width: 460px;
+  height: 460px;
+  top: -120px;
+  right: 8%;
+  background: rgba(29, 185, 84, 0.32);
+  animation: bonk-float 18s ease-in-out infinite alternate;
+}
+.bonk-scene__glow--b {
+  width: 380px;
+  height: 380px;
+  bottom: -140px;
+  left: -60px;
+  background: rgba(56, 217, 196, 0.16);
+  animation: bonk-float 22s ease-in-out infinite alternate-reverse;
+}
+
+.bonk-grid-overlay {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(120, 160, 140, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120, 160, 140, 0.04) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: radial-gradient(80% 80% at 50% 40%, #000, transparent 80%);
+  -webkit-mask-image: radial-gradient(80% 80% at 50% 40%, #000, transparent 80%);
+}
+
+@keyframes bonk-drift {
+  from { transform: scale(1.04) translate3d(0, 0, 0); }
+  to { transform: scale(1.12) translate3d(-2%, -1.5%, 0); }
+}
+@keyframes bonk-float {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(0, 28px, 0); }
+}
+
+/* Glass surface used by panels. */
+.bonk-glass {
+  background: var(--bonk-panel);
+  backdrop-filter: blur(18px) saturate(1.1);
+  border: 1px solid var(--bonk-line);
+}
+
+/* Thin scrollbars inside dark panels. */
+.bonk-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.bonk-scroll::-webkit-scrollbar-thumb {
+  background: rgba(120, 160, 140, 0.22);
+  border-radius: 9999px;
+}
+.bonk-scroll::-webkit-scrollbar-track { background: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bonk-scene__splash,
+  .bonk-scene__glow--a,
+  .bonk-scene__glow--b {
+    animation: none;
+  }
+}
