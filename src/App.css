@@ -2804,7 +2804,7 @@ body {
   background:
     linear-gradient(90deg, rgba(0, 0, 0, 0.86) 0 13%, rgba(0, 0, 0, 0.28) 42%, rgba(0, 0, 0, 0.78) 100%),
     linear-gradient(180deg, rgba(0, 0, 0, 0.22), rgba(0, 0, 0, 0.78)),
-    url("bonk-lcu://champion-splashes/24/24000.jpg");
+    var(--jax-splash-image, none);
   background-position: center 22%;
   background-size: cover;
   transform: none;

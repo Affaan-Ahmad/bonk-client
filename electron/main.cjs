@@ -1,5 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain, protocol, shell } = require("electron");
 const { spawn } = require("child_process");
+const { autoUpdater } = require("electron-updater");
+const log = require("electron-log");
 const fs = require("fs");
 const https = require("https");
 const os = require("os");
@@ -25,6 +27,69 @@ protocol.registerSchemesAsPrivileged([
     },
   },
 ]);
+
+autoUpdater.logger = log;
+autoUpdater.autoDownload = false;
+
+function setupAutoUpdater() {
+  if (isDev) {
+    return;
+  }
+
+  autoUpdater.on("checking-for-update", () => {
+    log.info("Checking for BONK Client update...");
+  });
+
+  autoUpdater.on("update-available", async (info) => {
+    const result = await dialog.showMessageBox({
+      type: "info",
+      title: "BONK Client Update",
+      message: `Update available: ${info.version}`,
+      detail: "A new BONK Client update is available. Download it now?",
+      buttons: ["Download", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+
+    if (result.response === 0) {
+      autoUpdater.downloadUpdate();
+    }
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    log.info("BONK Client is up to date.");
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    log.info(`Downloading BONK Client update: ${Math.round(progress.percent)}%`);
+  });
+
+  autoUpdater.on("update-downloaded", async () => {
+    const result = await dialog.showMessageBox({
+      type: "info",
+      title: "BONK Client Update Ready",
+      message: "Update downloaded.",
+      detail: "Restart BONK Client now to install the update?",
+      buttons: ["Restart & Install", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+
+    if (result.response === 0) {
+      autoUpdater.quitAndInstall(false, true);
+    }
+  });
+
+  autoUpdater.on("error", (error) => {
+    log.error("BONK Client updater error:", error);
+  });
+
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch((error) => {
+      log.error("BONK Client update check failed:", error);
+    });
+  }, 3000);
+}
 
 function getConfigPath() {
   return path.join(app.getPath("userData"), "bonk-client-config.json");
@@ -872,6 +937,7 @@ ipcMain.handle("app:exit", () => {
 app.whenReady().then(() => {
   registerLcuAssetProtocol();
   createWindow();
+  setupAutoUpdater();
 });
 
 app.on("window-all-closed", () => {

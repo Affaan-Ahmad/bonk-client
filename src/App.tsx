@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
 type LobbySlot = {
@@ -947,7 +947,11 @@ function App() {
 
   return (
     <main className="clientShell">
-      <div className="scene" aria-hidden="true">
+      <div
+        className="scene"
+        style={{ "--jax-splash-image": 'url("bonk-lcu://champion-splashes/24/24000.jpg")' } as CSSProperties}
+        aria-hidden="true"
+      >
         <span className="sceneGlow sceneGlowA" />
         <span className="sceneGlow sceneGlowB" />
         <span className="sceneRune runeA" />
