@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { Gamepad2, Users, Loader2, UserPlus } from "lucide-react";
+import { Gamepad2, Users, Loader2, UserPlus, ShieldAlert } from "lucide-react";
 
 import { PartyCards } from "@/components/PartyCards";
 import { RoleSelector } from "@/components/RoleSelector";
@@ -8,10 +8,19 @@ import { InventoryCards } from "@/components/InventoryCards";
 import { GameModeDialog } from "@/components/GameModeDialog";
 import { Switch } from "@/components/ui/switch";
 import { QUEUE_OPTIONS } from "@/lib/constants";
-import { formatQueueName } from "@/lib/league-helpers";
+import { formatQueueName, formatElapsedTime } from "@/lib/league-helpers";
 import { cn } from "@/lib/utils";
 import type { LeagueClient } from "@/lib/useLeagueClient";
 import type { ModeCategory } from "@/types/league";
+
+function restrictionLabel(reason?: string | null) {
+  const key = String(reason ?? "").toUpperCase();
+  if (key.includes("LEAVER")) return "Low priority queue (leaver penalty)";
+  if (key.includes("DODGE")) return "Dodge penalty";
+  if (key.includes("RANKED")) return "Ranked restriction";
+  if (!reason) return "Queue restriction";
+  return reason.replace(/_/g, " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
+}
 
 export function PlayScreen({
   client,
@@ -50,6 +59,8 @@ export function PlayScreen({
     knownGameQueues,
     findKnownQueue,
     queueElapsedLabel,
+    queueRestriction,
+    penaltySecondsRemaining,
     actionStatus,
     accountStatus,
     autoAccept,
@@ -72,11 +83,16 @@ export function PlayScreen({
     ? formatQueueName(currentQueueId)
     : selectedQueue.label;
 
-  const queueLabel = searching
-    ? "Leave Queue"
-    : isInLeagueLobby
-      ? "Find Match"
-      : "Create Party";
+  // A wait restriction (dodge timer) blocks queueing until it expires.
+  const penaltyBlocking = penaltySecondsRemaining > 0 && !searching;
+
+  const queueLabel = penaltyBlocking
+    ? formatElapsedTime(penaltySecondsRemaining)
+    : searching
+      ? "Leave Queue"
+      : isInLeagueLobby
+        ? "Find Match"
+        : "Create Party";
 
   return (
     <section className="relative z-10 flex h-full flex-col items-center justify-between gap-6 px-8 py-6">
@@ -149,15 +165,41 @@ export function PlayScreen({
           onSecondaryChange={changeSecondaryRole}
         />
 
+        {queueRestriction && (
+          <div className="flex w-full max-w-md items-center gap-2 rounded-xl border border-bonk-danger/40 bg-bonk-danger/10 px-4 py-2.5 text-xs text-bonk-danger">
+            <ShieldAlert className="size-4 shrink-0" />
+            <span className="flex-1">
+              {restrictionLabel(queueRestriction.reason)}
+              {queueRestriction.names.length > 0 && (
+                <span className="text-bonk-muted"> · {queueRestriction.names.join(", ")}</span>
+              )}
+            </span>
+            {queueRestriction.penaltySeconds > 0 && (
+              <span className="font-mono tabular-nums">
+                {formatElapsedTime(queueRestriction.penaltySeconds)}
+              </span>
+            )}
+          </div>
+        )}
+
         <motion.button
-          whileHover={{ scale: 1.02 }}
-          whileTap={{ scale: 0.98 }}
-          onClick={() => void handleQueueButton()}
+          whileHover={penaltyBlocking ? undefined : { scale: 1.02 }}
+          whileTap={penaltyBlocking ? undefined : { scale: 0.98 }}
+          disabled={penaltyBlocking}
+          onClick={() => {
+            if (penaltyBlocking) {
+              setActionStatus("Wait for the restriction timer to end");
+              return;
+            }
+            void handleQueueButton();
+          }}
           className={cn(
             "relative flex h-14 w-full max-w-md items-center justify-center gap-2 overflow-hidden rounded-2xl font-display text-lg font-bold transition-colors",
-            searching
-              ? "bg-bonk-danger/15 text-bonk-danger border border-bonk-danger/40"
-              : "bg-bonk-green text-[#04150b] shadow-[0_0_40px_-10px_var(--bonk-green)] hover:bg-bonk-green-bright",
+            penaltyBlocking
+              ? "cursor-not-allowed border border-bonk-danger/40 bg-bonk-danger/15 text-bonk-danger"
+              : searching
+                ? "bg-bonk-danger/15 text-bonk-danger border border-bonk-danger/40"
+                : "bg-bonk-green text-[#04150b] shadow-[0_0_40px_-10px_var(--bonk-green)] hover:bg-bonk-green-bright",
           )}
         >
           {searching && (
@@ -171,6 +213,7 @@ export function PlayScreen({
               transition={{ duration: 1.6, repeat: Infinity }}
             />
           )}
+          {penaltyBlocking && <ShieldAlert className="size-5" />}
           {searching && <Loader2 className="size-5 animate-spin" />}
           <span>{queueLabel}</span>
           {searching && (

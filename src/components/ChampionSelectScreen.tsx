@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useMemo } from "react";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import { Lock, Ban } from "lucide-react";
 
 import { ChampionGrid } from "@/components/ChampionGrid";
 import { RunePanel } from "@/components/RunePanel";
+import { SkinPicker } from "@/components/SkinPicker";
+import { RuneEditor } from "@/components/RuneEditor";
 import { championIconSrc, formatPosition, phaseLabel, formatPhaseTimer, resolveChampSelectBans } from "@/lib/league-helpers";
 import { cn } from "@/lib/utils";
 import type { LeagueClient } from "@/lib/useLeagueClient";
@@ -94,6 +96,7 @@ function BanStrip({
 
 export function ChampionSelectScreen({ client }: { client: LeagueClient }) {
   const [search, setSearch] = useState("");
+  const [runeEditorOpen, setRuneEditorOpen] = useState(false);
   const {
     champSelect,
     champSelectSession,
@@ -101,10 +104,11 @@ export function ChampionSelectScreen({ client }: { client: LeagueClient }) {
     localAction,
     localActionType,
     localActions,
+    canLock,
     activeChampionId,
     selectedChampion,
     championById,
-    availableChampionSet,
+    takenChampionIds,
     bannedChampionIds,
     phaseTimeLeft,
     phaseProgress,
@@ -112,12 +116,16 @@ export function ChampionSelectScreen({ client }: { client: LeagueClient }) {
     localSpell2Id,
     summonerSpells,
     recommendedRunePages,
+    skinCarousel,
+    localSelectedSkinId,
     actionStatus,
     hoverChampion,
     lockInChampion,
     selectRunePage,
     setSummonerSpells,
+    setSkin,
     applyRunePage,
+    saveRunePage,
     sandbox,
     exitSandbox,
   } = client;
@@ -133,7 +141,7 @@ export function ChampionSelectScreen({ client }: { client: LeagueClient }) {
       .sort((left, right) => left.name.localeCompare(right.name));
   }, [champSelect, search]);
 
-  const canAct = Boolean(localAction && activeChampionId);
+  const canAct = Boolean(canLock && activeChampionId);
 
   return (
     <motion.section
@@ -162,9 +170,11 @@ export function ChampionSelectScreen({ client }: { client: LeagueClient }) {
             {phaseLabel(champSelectSession?.timer?.phase)}
           </h2>
           <p className="text-xs text-bonk-muted">
-            {localAction
-              ? `Your ${localActionType} is active`
-              : "Waiting for your turn"}
+            {canLock
+              ? `Your turn — ${localActionType === "ban" ? "ban a champion" : "lock in"}`
+              : localAction
+                ? "Declare your intended pick"
+                : "Waiting for your turn"}
           </p>
         </div>
 
@@ -243,7 +253,7 @@ export function ChampionSelectScreen({ client }: { client: LeagueClient }) {
           search={search}
           onSearchChange={setSearch}
           activeChampionId={activeChampionId}
-          availableChampionSet={availableChampionSet}
+          takenChampionIds={takenChampionIds}
           bannedChampionIds={bannedChampionIds}
           isBanPhase={isBanPhase}
           onPick={(championId) => void hoverChampion(championId)}
@@ -298,6 +308,12 @@ export function ChampionSelectScreen({ client }: { client: LeagueClient }) {
             </p>
           </div>
 
+          <SkinPicker
+            skins={skinCarousel}
+            selectedSkinId={localSelectedSkinId}
+            onSelectSkin={(skinId) => void setSkin(skinId)}
+          />
+
           <RunePanel
             runePages={champSelect?.runePages ?? []}
             perkStyles={champSelect?.perkStyles ?? []}
@@ -309,9 +325,23 @@ export function ChampionSelectScreen({ client }: { client: LeagueClient }) {
             onSelectPage={(pageId) => void selectRunePage(pageId)}
             onApplyRecommended={(page) => void applyRunePage(page)}
             onSetSpells={(spell1, spell2) => void setSummonerSpells(spell1, spell2)}
+            onEditRunes={() => setRuneEditorOpen(true)}
           />
         </aside>
       </div>
+
+      <AnimatePresence>
+        {runeEditorOpen && (
+          <RuneEditor
+            perkStyles={champSelect?.perkStyles ?? []}
+            perks={champSelect?.perks ?? []}
+            currentPage={champSelect?.currentRunePage ?? null}
+            recommendedRunePages={recommendedRunePages}
+            onSave={(page) => void saveRunePage(page)}
+            onClose={() => setRuneEditorOpen(false)}
+          />
+        )}
+      </AnimatePresence>
     </motion.section>
   );
 }

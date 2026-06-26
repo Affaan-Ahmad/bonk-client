@@ -5,6 +5,7 @@ import {
   DownloadCloud,
   RefreshCw,
   FlaskConical,
+  ImageOff,
   type LucideIcon,
 } from "lucide-react";
 
@@ -61,6 +62,7 @@ export function SettingsScreen({ client }: { client: LeagueClient }) {
     loadRankedProfile,
     checkLeagueClient,
     enterSandbox,
+    setActionStatus,
   } = client;
 
   const connected = Boolean(leagueClientStatus?.connected);
@@ -142,6 +144,17 @@ export function SettingsScreen({ client }: { client: LeagueClient }) {
         actionLabel="Enter"
         tone="primary"
         onClick={enterSandbox}
+      />
+      <ActionRow
+        icon={ImageOff}
+        title="Clear icon cache"
+        description="Delete cached champion, rune, and spell images. They re-download from League on next use."
+        actionLabel="Clear"
+        onClick={async () => {
+          setActionStatus("Clearing icon cache...");
+          const ok = await window.bonkClient.clearAssetCache();
+          setActionStatus(ok ? "Icon cache cleared" : "Could not clear icon cache");
+        }}
       />
 
       <div className="mt-1 rounded-xl border border-bonk-line bg-black/20 px-4 py-3 text-xs text-bonk-muted">

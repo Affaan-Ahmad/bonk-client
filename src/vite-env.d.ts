@@ -92,6 +92,8 @@ type LeagueGameQueue = {
   queueId?: number | string;
   name?: string;
   description?: string;
+  gameMode?: string;
+  mapId?: number;
   queueAvailability?: string;
   availability?: string;
   status?: string;
@@ -119,6 +121,21 @@ type LeagueMatchmakingSearch = {
   timeInQueue?: number;
   timeInQueueSeconds?: number;
   queueId?: number;
+  isCurrentlyInQueue?: boolean;
+  errors?: {
+    errorType?: string;
+    id?: number;
+    message?: string;
+    penalizedSummonerId?: number;
+    penaltyTimeRemaining?: number;
+  }[];
+  lowPriorityData?: {
+    penalizedSummonerIds?: number[];
+    penaltyTime?: number;
+    penaltyTimeRemaining?: number;
+    reason?: string;
+    bustedLeaverAccessToken?: string;
+  };
 };
 
 type LeagueChampSelectAction = {
@@ -158,6 +175,113 @@ type LeagueChampSelectSession = {
   };
 };
 
+type LeagueRankedEntry = {
+  tier: string;
+  division: string;
+  leaguePoints: number;
+  wins: number;
+  losses: number;
+};
+
+type LeagueMasteryEntry = {
+  championId: number;
+  level: number;
+  points: number;
+};
+
+type LeagueMatchSummary = {
+  gameId: number;
+  queueId?: number;
+  gameMode?: string;
+  gameCreation?: number;
+  gameDuration?: number;
+  championId: number;
+  win: boolean;
+  kills: number;
+  deaths: number;
+  assists: number;
+  cs: number;
+  champLevel: number;
+  gold: number;
+  damage: number;
+  damageTaken: number;
+  visionScore: number;
+  wardsPlaced: number;
+  largestMultiKill: number;
+  items: { id: number; iconPath: string | null }[];
+};
+
+type LeagueStoreItem = {
+  id: number;
+  championId: number;
+  name: string;
+  tilePath: string | null;
+  rp: number | null;
+  be: number | null;
+  sale: { cost: number; currency: string } | null;
+};
+
+type LeagueStoreData = {
+  champions: LeagueStoreItem[];
+  skins: LeagueStoreItem[];
+  wallet: { rp: number; be: number };
+};
+
+type LeagueMatchPlayer = {
+  teamId: number;
+  championId: number;
+  name: string;
+  tagLine: string;
+  isLocal: boolean;
+  kills: number;
+  deaths: number;
+  assists: number;
+  cs: number;
+  gold: number;
+  damage: number;
+  champLevel: number;
+  spell1Id: number;
+  spell2Id: number;
+  items: { id: number; iconPath: string | null }[];
+};
+
+type LeagueMatchDetail = {
+  gameId: number;
+  gameDuration?: number;
+  queueId?: number;
+  allyTeam: { players: LeagueMatchPlayer[]; win: boolean };
+  enemyTeam: { players: LeagueMatchPlayer[]; win: boolean };
+};
+
+type LeagueProfileData = {
+  summoner: LeagueSummoner | null;
+  rankedSolo: LeagueRankedEntry | null;
+  rankedFlex: LeagueRankedEntry | null;
+  mastery: LeagueMasteryEntry[];
+  matches: LeagueMatchSummary[];
+  ownedIconIds: number[];
+};
+
+type LeagueCollectionChampion = {
+  id: number;
+  name: string;
+  alias?: string;
+  squarePortraitPath?: string;
+  roles: string[];
+  owned: boolean;
+};
+
+type LeagueCollectionSkin = {
+  id: number;
+  championId: number;
+  name: string;
+  tilePath?: string;
+  splashPath?: string;
+  isBase: boolean;
+  rarity?: string | null;
+  owned: boolean;
+};
+
 type LeagueChampionSummary = {
   id: number;
   name: string;
@@ -176,9 +300,26 @@ type LeagueRunePage = {
   selectedPerkIds?: number[];
 };
 
+type LeaguePerkStyleSlot = {
+  type?: string;
+  slotLabel?: string;
+  perks: number[];
+};
+
 type LeaguePerkStyle = {
   id: number;
   name: string;
+  tooltip?: string;
+  iconPath?: string;
+  slots?: LeaguePerkStyleSlot[];
+};
+
+type LeaguePerk = {
+  id: number;
+  name: string;
+  shortDesc?: string;
+  longDesc?: string;
+  iconPath?: string;
   tooltip?: string;
 };
 
@@ -191,6 +332,16 @@ type LeagueSummonerSpell = {
   iconPath?: string;
 };
 
+type LeagueSkinCarouselSkin = {
+  id: number;
+  name: string;
+  unlocked?: boolean;
+  disabled?: boolean;
+  ownership?: { owned?: boolean };
+  isBase?: boolean;
+  childSkins?: LeagueSkinCarouselSkin[];
+};
+
 type LeagueChampSelectOverview = {
   session: LeagueChampSelectSession;
   pickableChampionIds: number[];
@@ -201,6 +352,20 @@ type LeagueChampSelectOverview = {
   perkStyles: LeaguePerkStyle[];
   summonerSpells: LeagueSummonerSpell[];
   recommendedRunePages: LeagueRunePage[];
+  perks: LeaguePerk[];
+  skinCarousel: LeagueSkinCarouselSkin[];
+};
+
+type LeagueHonorBallot = {
+  gameId?: number;
+  players: {
+    summonerId: number;
+    puuid: string;
+    name: string;
+    championId: number;
+    position: string;
+    botPlayer: boolean;
+  }[];
 };
 
 type LeagueOverview = {
@@ -212,6 +377,8 @@ type LeagueOverview = {
   readyCheck: LeagueReadyCheck | null;
   matchmakingSearch: LeagueMatchmakingSearch | null;
   champSelect: LeagueChampSelectOverview | null;
+  gameflowPhase: string | null;
+  honorBallot: LeagueHonorBallot | null;
 };
 
 interface Window {
@@ -245,7 +412,25 @@ interface Window {
       spell1Id: number,
       spell2Id: number,
     ) => Promise<LeagueOverview>;
+    setSkin: (selectedSkinId: number) => Promise<LeagueOverview>;
     applyRunePage: (page: LeagueRunePage) => Promise<LeagueOverview>;
+    saveRunePage: (page: LeagueRunePage) => Promise<LeagueOverview>;
+    getRuneData: () => Promise<{
+      perkStyles: LeaguePerkStyle[];
+      perks: LeaguePerk[];
+      recommendedRunePages: LeagueRunePage[];
+      summonerSpells: LeagueSummonerSpell[];
+    }>;
+    clearAssetCache: () => Promise<boolean>;
+    getCollection: () => Promise<{
+      champions: LeagueCollectionChampion[];
+      skins: LeagueCollectionSkin[];
+    }>;
+    getProfile: () => Promise<LeagueProfileData>;
+    getMatchDetail: (gameId: number) => Promise<LeagueMatchDetail | null>;
+    getStore: () => Promise<LeagueStoreData>;
+    honorPlayer: (summonerId: number) => Promise<LeagueOverview>;
+    setProfileIcon: (iconId: number) => Promise<LeagueOverview>;
     acceptReadyCheck: () => Promise<LeagueOverview>;
     declineReadyCheck: () => Promise<LeagueOverview>;
     selectLeagueFolder: () => Promise<LeagueClientStatus>;

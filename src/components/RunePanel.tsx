@@ -1,37 +1,113 @@
-import { motion } from "motion/react";
+import { useState } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import { Check, Sparkles, Wand2 } from "lucide-react";
 
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { perkIconSrc } from "@/lib/league-helpers";
 import { cn } from "@/lib/utils";
 
-function SpellSelect({
-  value,
-  exclude,
-  spells,
-  onChange,
-}: {
-  value: number | null;
-  exclude: number | null;
-  spells: LeagueSummonerSpell[];
-  onChange: (id: number) => void;
-}) {
+function SpellIcon({ spell, className }: { spell?: LeagueSummonerSpell; className?: string }) {
   return (
-    <select
-      value={value ?? ""}
-      onChange={(event) => onChange(Number(event.target.value))}
-      className="h-10 flex-1 rounded-lg border border-bonk-line bg-black/30 px-2 text-sm text-bonk-text outline-none focus:border-bonk-green/50"
+    <span
+      className={cn(
+        "relative grid place-items-center overflow-hidden rounded-md bg-black/40",
+        className,
+      )}
     >
-      <option value="" disabled>
-        Spell
-      </option>
-      {spells
-        .filter((spell) => spell.id !== exclude)
-        .map((spell) => (
-          <option key={spell.id} value={spell.id}>
-            {spell.name}
-          </option>
-        ))}
-    </select>
+      <span className="absolute text-[8px] font-semibold text-bonk-faint">
+        {spell?.name?.slice(0, 2) ?? "?"}
+      </span>
+      {spell?.iconPath && (
+        <img
+          src={perkIconSrc(spell.iconPath)}
+          alt={spell.name}
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+          }}
+          className="relative size-full object-cover"
+        />
+      )}
+    </span>
+  );
+}
+
+function SpellPicker({
+  spells,
+  spell1Id,
+  spell2Id,
+  onSetSpells,
+}: {
+  spells: LeagueSummonerSpell[];
+  spell1Id: number | null;
+  spell2Id: number | null;
+  onSetSpells: (spell1Id: number, spell2Id: number) => void;
+}) {
+  const [activeSlot, setActiveSlot] = useState<0 | 1 | null>(null);
+  const byId = (id: number | null) => spells.find((spell) => spell.id === id);
+
+  const choose = (spellId: number) => {
+    if (activeSlot === 0) {
+      // Avoid duplicate spells: if the new spell equals slot 2, swap.
+      onSetSpells(spellId, spellId === spell2Id ? spell1Id ?? 0 : spell2Id ?? 0);
+    } else if (activeSlot === 1) {
+      onSetSpells(spellId === spell1Id ? spell2Id ?? 0 : spell1Id ?? 0, spellId);
+    }
+    setActiveSlot(null);
+  };
+
+  return (
+    <div>
+      <div className="flex gap-2">
+        {[0, 1].map((slot) => {
+          const current = byId(slot === 0 ? spell1Id : spell2Id);
+          const open = activeSlot === slot;
+          return (
+            <button
+              key={slot}
+              onClick={() => setActiveSlot(open ? null : (slot as 0 | 1))}
+              className={cn(
+                "flex flex-1 items-center gap-2 rounded-lg border px-2 py-1.5 transition-colors",
+                open
+                  ? "border-bonk-green/60 bg-bonk-green-dim"
+                  : "border-bonk-line bg-black/30 hover:border-white/20",
+              )}
+            >
+              <SpellIcon spell={current} className="size-7" />
+              <span className="truncate text-sm text-bonk-text">{current?.name ?? "Spell"}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <AnimatePresence initial={false}>
+        {activeSlot !== null && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="mt-2 grid grid-cols-5 gap-2 rounded-lg border border-bonk-line bg-black/20 p-2">
+              {spells.map((spell) => (
+                <button
+                  key={spell.id}
+                  title={spell.name}
+                  onClick={() => choose(spell.id)}
+                  className={cn(
+                    "grid place-items-center rounded-md border p-0.5 transition-colors",
+                    (activeSlot === 0 ? spell1Id : spell2Id) === spell.id
+                      ? "border-bonk-green"
+                      : "border-transparent hover:border-white/20",
+                  )}
+                >
+                  <SpellIcon spell={spell} className="size-9" />
+                </button>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
 
@@ -46,6 +122,7 @@ export function RunePanel({
   onSelectPage,
   onApplyRecommended,
   onSetSpells,
+  onEditRunes,
 }: {
   runePages: LeagueRunePage[];
   perkStyles: LeaguePerkStyle[];
@@ -57,6 +134,7 @@ export function RunePanel({
   onSelectPage: (pageId: number) => void;
   onApplyRecommended: (page: LeagueRunePage) => void;
   onSetSpells: (spell1Id: number, spell2Id: number) => void;
+  onEditRunes: () => void;
 }) {
   const styleName = (id?: number, fallback = "—") =>
     perkStyles.find((style) => style.id === id)?.name ?? fallback;
@@ -77,20 +155,12 @@ export function RunePanel({
         {spells.length === 0 ? (
           <p className="text-[11px] text-bonk-faint">Spell data loads with champ select.</p>
         ) : (
-          <div className="flex gap-2">
-            <SpellSelect
-              value={spell1Id}
-              exclude={spell2Id}
-              spells={spells}
-              onChange={(id) => onSetSpells(id, spell2Id ?? 0)}
-            />
-            <SpellSelect
-              value={spell2Id}
-              exclude={spell1Id}
-              spells={spells}
-              onChange={(id) => onSetSpells(spell1Id ?? 0, id)}
-            />
-          </div>
+          <SpellPicker
+            spells={spells}
+            spell1Id={spell1Id}
+            spell2Id={spell2Id}
+            onSetSpells={onSetSpells}
+          />
         )}
       </div>
 
@@ -134,10 +204,20 @@ export function RunePanel({
               Rune pages
             </p>
           </div>
-          <span className="truncate text-[11px] text-bonk-muted">{currentPageName ?? ""}</span>
+          <div className="flex items-center gap-2">
+            <span className="max-w-24 truncate text-[11px] text-bonk-muted">
+              {currentPageName ?? ""}
+            </span>
+            <button
+              onClick={onEditRunes}
+              className="rounded-md border border-bonk-line bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-bonk-text transition-colors hover:border-bonk-green/40 hover:text-bonk-green-bright"
+            >
+              Edit
+            </button>
+          </div>
         </div>
-        <ScrollArea className="max-h-40 bonk-scroll">
-          <div className="flex flex-col gap-1.5 pr-2">
+        <div className="max-h-44 overflow-y-auto bonk-scroll">
+          <div className="flex flex-col gap-1.5 pr-1">
             {runePages.length === 0 ? (
               <div className="flex flex-col items-center gap-1 py-6 text-center">
                 <strong className="text-sm text-bonk-text">No rune pages</strong>
@@ -170,7 +250,7 @@ export function RunePanel({
               ))
             )}
           </div>
-        </ScrollArea>
+        </div>
       </div>
     </div>
   );

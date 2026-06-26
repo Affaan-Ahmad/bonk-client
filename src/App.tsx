@@ -5,8 +5,12 @@ import { Sidebar } from "@/components/Sidebar";
 import { PlayScreen } from "@/components/PlayScreen";
 import { ChampionSelectScreen } from "@/components/ChampionSelectScreen";
 import { SettingsScreen } from "@/components/SettingsScreen";
+import { CollectionScreen } from "@/components/CollectionScreen";
+import { ProfileScreen } from "@/components/ProfileScreen";
+import { StoreScreen } from "@/components/StoreScreen";
 import { FriendsDrawer } from "@/components/FriendsDrawer";
 import { ReadyCheckModal } from "@/components/ReadyCheckModal";
+import { HonorModal } from "@/components/HonorModal";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useLeagueClient } from "@/lib/useLeagueClient";
 import { SCENE_SPLASH_URL } from "@/lib/constants";
@@ -116,6 +120,12 @@ function App() {
               <ChampionSelectScreen client={client} />
             ) : activeNav === "Settings" ? (
               <SettingsScreen client={client} />
+            ) : activeNav === "Collection" ? (
+              <CollectionScreen client={client} />
+            ) : activeNav === "Profile" ? (
+              <ProfileScreen client={client} />
+            ) : activeNav === "Store" ? (
+              <StoreScreen client={client} />
             ) : (
               <PlayScreen
                 client={client}
@@ -144,6 +154,8 @@ function App() {
           onDecline={() => void client.declineReadyCheck()}
           responseLabel={client.readyCheck?.playerResponse}
         />
+
+        <HonorModal client={client} />
       </main>
     </TooltipProvider>
   );

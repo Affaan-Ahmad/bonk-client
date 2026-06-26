@@ -14,6 +14,19 @@ export function championInitial(champion?: ChampionSummary | null) {
   return champion?.name?.slice(0, 1) ?? "?";
 }
 
+// Rune/perk and style icons via the general LCU asset passthrough.
+export function perkIconSrc(iconPath?: string) {
+  if (!iconPath) return "";
+  const normalized = iconPath.startsWith("/") ? iconPath : `/${iconPath}`;
+  if (!normalized.startsWith("/lol-game-data/assets/")) return "";
+  return `bonk-lcu://lcu-asset/?path=${encodeURIComponent(normalized)}`;
+}
+
+export function profileIconSrc(iconId?: number) {
+  if (!iconId && iconId !== 0) return "";
+  return perkIconSrc(`/lol-game-data/assets/v1/profile-icons/${iconId}.jpg`);
+}
+
 // ---------------------------------------------------------------------------
 // Friends
 // ---------------------------------------------------------------------------

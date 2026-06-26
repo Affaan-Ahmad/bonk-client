@@ -10,7 +10,6 @@ import {
   flattenChampSelectActions,
   formatElapsedTime,
   formatPosition,
-  formatReadyCheckTimer,
   formatTier,
   getLeagueQueueElapsedSeconds,
   isLocalChampAction,
@@ -50,6 +49,11 @@ function buildEmptySlot(slotNumber: number): LobbySlot {
 export type LeagueClient = ReturnType<typeof useLeagueClient>;
 
 // BONK role label -> LCU position-preference value.
+// Base, player-selectable summoner spells. Excludes smite upgrades (Challenging/
+// Chilling) and other non-selectable variants. Mode-specific spells (Mark/Snowball
+// = 32, URF Mark = 39) are further gated by each spell's gameModes.
+const SELECTABLE_SUMMONER_SPELL_IDS = new Set([1, 3, 4, 6, 7, 11, 12, 13, 14, 21, 32, 39]);
+
 const ROLE_TO_POSITION: Record<string, string> = {
   Top: "TOP",
   Jungle: "JUNGLE",
@@ -58,6 +62,24 @@ const ROLE_TO_POSITION: Record<string, string> = {
   Support: "UTILITY",
   Fill: "FILL",
 };
+
+const POSITION_TO_ROLE: Record<string, string> = {
+  TOP: "Top",
+  JUNGLE: "Jungle",
+  MIDDLE: "Mid",
+  BOTTOM: "Bot",
+  UTILITY: "Support",
+  FILL: "Fill",
+};
+
+// Gameflow phases where a match is live/finishing; leaving this set = game ended.
+const GAME_ACTIVE_PHASES = [
+  "InProgress",
+  "WaitingForStats",
+  "PreEndOfGame",
+  "EndOfGame",
+  "Reconnect",
+];
 
 export function useLeagueClient() {
   const [account, setAccount] = useState<RiotAccount | null>(null);
@@ -72,6 +94,10 @@ export function useLeagueClient() {
   const [selectedQueueId, setSelectedQueueId] = useState(420);
   const [selectedRole, setSelectedRole] = useState("Mid");
   const [selectedSecondaryRole, setSelectedSecondaryRole] = useState("Jungle");
+  // Track the last lobby preference we synced from, so we only adopt the lobby's
+  // values when they actually change (not on every poll, which would fight edits).
+  const syncedFirstPrefRef = useRef<string | null>(null);
+  const syncedSecondPrefRef = useRef<string | null>(null);
   const [selectedCardSkinId, setSelectedCardSkinId] = useState("neon-green");
   const [actionStatus, setActionStatus] = useState("Ready");
 
@@ -84,6 +110,23 @@ export function useLeagueClient() {
   const autoAcceptingRef = useRef(false);
   const [sandbox, setSandbox] = useState(false);
   const sandboxRef = useRef(false);
+  const [collection, setCollection] = useState<{
+    champions: LeagueCollectionChampion[];
+    skins: LeagueCollectionSkin[];
+  } | null>(null);
+  const [collectionLoading, setCollectionLoading] = useState(false);
+  const [profile, setProfile] = useState<LeagueProfileData | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const profileLoadedRef = useRef(false);
+  const prevPhaseRef = useRef<string | null>(null);
+  const [dismissedBallotGameId, setDismissedBallotGameId] = useState<number | null>(null);
+  const [matchDetails, setMatchDetails] = useState<
+    Record<number, LeagueMatchDetail | "loading" | "error">
+  >({});
+  const [store, setStore] = useState<LeagueStoreData | null>(null);
+  const [storeLoading, setStoreLoading] = useState(false);
+  // Timestamp of the most recent overview poll, for smooth timer interpolation.
+  const overviewAtRef = useRef(Date.now());
 
   // ----- derived: rank -----
   const soloQueue = rankedProfile?.soloQueue ?? null;
@@ -107,22 +150,80 @@ export function useLeagueClient() {
 
   const matchmakingSearch = leagueOverview?.matchmakingSearch ?? null;
   const isInMatchmaking = isMatchmakingActive(matchmakingSearch);
+
+  // ----- derived: gameflow / honor -----
+  const gameflowPhase = leagueOverview?.gameflowPhase ?? null;
+  const honorBallot = leagueOverview?.honorBallot ?? null;
+  const activeHonorBallot =
+    honorBallot && honorBallot.players.length > 0 && (honorBallot.gameId ?? -1) !== dismissedBallotGameId
+      ? honorBallot
+      : null;
+  // Milliseconds since the last overview poll, for smoothing timers between polls.
+  const sinceOverview = Math.max(0, clockNow - overviewAtRef.current);
   const leagueQueueElapsedSeconds = getLeagueQueueElapsedSeconds(matchmakingSearch);
   const localQueueElapsedSeconds = queueStartedAt
-    ? Math.floor((clockNow - queueStartedAt) / 1000)
+    ? (clockNow - queueStartedAt) / 1000
     : 0;
-  const queueElapsedSeconds = leagueQueueElapsedSeconds ?? localQueueElapsedSeconds;
+  // Anchor to the server value and tick locally so it moves every frame, not every 2s.
+  const queueElapsedSeconds = isInMatchmaking
+    ? Math.floor((leagueQueueElapsedSeconds ?? localQueueElapsedSeconds) + sinceOverview / 1000)
+    : 0;
   const queueElapsedLabel = formatElapsedTime(queueElapsedSeconds);
 
-  // ----- derived: ready check -----
+  // ----- derived: queue restriction (low priority / dodge timer) -----
+  const lowPriorityData = matchmakingSearch?.lowPriorityData ?? null;
+  const matchmakingErrors = matchmakingSearch?.errors ?? [];
+  const basePenaltySeconds = Number(
+    lowPriorityData?.penaltyTimeRemaining ??
+      matchmakingErrors.find((error) => Number(error.penaltyTimeRemaining) > 0)
+        ?.penaltyTimeRemaining ??
+      0,
+  );
+  const penaltySecondsRemaining =
+    basePenaltySeconds > 0 ? Math.max(0, Math.ceil(basePenaltySeconds - sinceOverview / 1000)) : 0;
+  const penalizedSummonerIds = [
+    ...(lowPriorityData?.penalizedSummonerIds ?? []),
+    ...matchmakingErrors.map((error) => error.penalizedSummonerId),
+  ]
+    .map(Number)
+    .filter((id) => Number.isInteger(id) && id > 0);
+  const restrictionReasonRaw =
+    lowPriorityData?.reason ?? matchmakingErrors[0]?.errorType ?? null;
+  const penalizedNames = [
+    ...new Set(
+      penalizedSummonerIds.map((id) => {
+        if (Number(localLobbyMember?.summonerId) === id) return "You";
+        const member = lobbyMembers.find((m) => Number(m.summonerId) === id);
+        return member?.gameName || member?.summonerName || "You";
+      }),
+    ),
+  ];
+  const queueRestriction =
+    penaltySecondsRemaining > 0 || restrictionReasonRaw
+      ? {
+          reason: restrictionReasonRaw,
+          penaltySeconds: penaltySecondsRemaining,
+          names: penalizedNames,
+          isLowPriority: Boolean(lowPriorityData),
+        }
+      : null;
+
+  // ----- derived: ready check (count DOWN — LCU `timer` is elapsed time) -----
   const readyCheck = leagueOverview?.readyCheck ?? null;
   const isReadyCheckActive = readyCheck?.state?.toLowerCase() === "inprogress";
   const readyCheckResponse = readyCheck?.playerResponse?.toLowerCase();
   const canRespondToReadyCheck =
     isReadyCheckActive && (!readyCheckResponse || readyCheckResponse === "none");
-  const readyCheckSeconds = formatReadyCheckTimer(
-    readyCheck?.timer ?? readyCheck?.readyCheckTimer ?? readyCheck?.timeLeft ?? null,
+  const readyCheckElapsedRaw = Number(
+    readyCheck?.timer ?? readyCheck?.readyCheckTimer ?? 0,
   );
+  const readyCheckElapsed = Number.isFinite(readyCheckElapsedRaw)
+    ? (readyCheckElapsedRaw > 1000 ? readyCheckElapsedRaw / 1000 : readyCheckElapsedRaw) +
+      sinceOverview / 1000
+    : 0;
+  const readyCheckSeconds = isReadyCheckActive
+    ? Math.max(0, Math.ceil(READY_CHECK_TOTAL_SECONDS - readyCheckElapsed))
+    : null;
   const readyCheckProgress = Math.max(
     0,
     Math.min(
@@ -142,29 +243,55 @@ export function useLeagueClient() {
   const localActions = champActions.filter((action) =>
     isLocalChampAction(action, localPlayerCellId),
   );
-  const localAction =
+  const isPickOrBan = (action: LeagueChampSelectAction) => {
+    const type = String(action.type).toLowerCase();
+    return type === "pick" || type === "ban";
+  };
+  // The action currently in progress for the local player (your turn to act).
+  const inProgressLocalAction =
     localActions.find(
-      (action) =>
-        action.isInProgress &&
-        !action.completed &&
-        (String(action.type).toLowerCase() === "pick" ||
-          String(action.type).toLowerCase() === "ban"),
-    ) ??
+      (action) => action.isInProgress && !action.completed && isPickOrBan(action),
+    ) ?? null;
+  // Your pick/ban actions regardless of turn (used to declare intent in planning).
+  const localPickAction =
     localActions.find(
-      (action) =>
-        !action.completed &&
-        (String(action.type).toLowerCase() === "pick" ||
-          String(action.type).toLowerCase() === "ban"),
-    ) ??
-    null;
-  const localActionType = String(localAction?.type ?? "").toLowerCase();
+      (action) => String(action.type).toLowerCase() === "pick" && !action.completed,
+    ) ?? null;
+  const localBanAction =
+    localActions.find(
+      (action) => String(action.type).toLowerCase() === "ban" && !action.completed,
+    ) ?? null;
+  // Clicking a champion declares intent against: the in-progress action if it's
+  // your turn, otherwise your pick action (planning/preference phase).
+  const hoverAction = inProgressLocalAction ?? localPickAction ?? localBanAction ?? null;
+  // You can only COMPLETE (ban / lock in) an action that is in progress.
+  const completableAction = inProgressLocalAction;
+  const canLock = Boolean(completableAction);
+  const localAction = hoverAction;
+  const localActionType = inProgressLocalAction
+    ? String(inProgressLocalAction.type).toLowerCase()
+    : "pick";
   const localPlayer = champSelectSession?.myTeam?.find(
     (player) => player.cellId === localPlayerCellId,
   );
   const localSpell1Id = localPlayer?.spell1Id ?? null;
   const localSpell2Id = localPlayer?.spell2Id ?? null;
-  const summonerSpells = champSelect?.summonerSpells ?? [];
+  // Only the base, player-selectable spells — excludes smite upgrades/variants.
+  const currentGameMode =
+    knownGameQueues.find(
+      (queue) => Number(queue.id ?? queue.queueId) === Number(currentQueueId),
+    )?.gameMode ?? "CLASSIC";
+  const rawSummonerSpells = champSelect?.summonerSpells ?? [];
+  const summonerSpells = rawSummonerSpells.filter(
+    (spell) =>
+      SELECTABLE_SUMMONER_SPELL_IDS.has(Number(spell.id)) &&
+      (!spell.gameModes ||
+        spell.gameModes.length === 0 ||
+        spell.gameModes.includes(currentGameMode)),
+  );
   const recommendedRunePages = champSelect?.recommendedRunePages ?? [];
+  const skinCarousel = champSelect?.skinCarousel ?? [];
+  const localSelectedSkinId = localPlayer?.selectedSkinId ?? null;
   const activeChampionId =
     selectedChampionId ?? localPlayer?.championId ?? localAction?.championId ?? null;
 
@@ -176,27 +303,59 @@ export function useLeagueClient() {
     return map;
   }, [champSelect]);
 
-  const availableChampionIds =
-    localActionType === "ban"
-      ? champSelect?.bannableChampionIds ?? []
-      : champSelect?.pickableChampionIds ?? [];
-  const availableChampionSet = useMemo(
-    () => new Set(availableChampionIds.map(Number)),
-    [availableChampionIds],
-  );
   const bannedChampionIds = useMemo(
     () =>
-      new Set([
-        ...(champSelectSession?.bans?.myTeamBans ?? []),
-        ...(champSelectSession?.bans?.theirTeamBans ?? []),
-      ]),
-    [champSelectSession],
+      new Set(
+        [
+          ...(champSelectSession?.bans?.myTeamBans ?? []),
+          ...(champSelectSession?.bans?.theirTeamBans ?? []),
+          // Bans also live in completed ban actions; include those.
+          ...champActions
+            .filter(
+              (action) =>
+                String(action.type).toLowerCase() === "ban" &&
+                action.completed &&
+                Number(action.championId) > 0,
+            )
+            .map((action) => Number(action.championId)),
+        ].filter((id) => Number(id) > 0),
+      ),
+    [champSelectSession, champActions],
   );
+
+  // Champions already locked/picked by ANY player (except the local player's own
+  // current selection) can't be picked again.
+  const takenChampionIds = useMemo(() => {
+    const taken = new Set<number>();
+    const players = [
+      ...(champSelectSession?.myTeam ?? []),
+      ...(champSelectSession?.theirTeam ?? []),
+    ];
+    for (const player of players) {
+      if (player.cellId === champSelectSession?.localPlayerCellId) continue;
+      const championId = Number(player.championId);
+      if (championId > 0) taken.add(championId);
+    }
+    // Completed picks from the actions list, too.
+    for (const action of champActions) {
+      if (String(action.type).toLowerCase() !== "pick") continue;
+      if (!action.completed) continue;
+      if (Number(action.actorCellId) === Number(champSelectSession?.localPlayerCellId)) continue;
+      const championId = Number(action.championId);
+      if (championId > 0) taken.add(championId);
+    }
+    return taken;
+  }, [champSelectSession, champActions]);
+
   const selectedChampion = activeChampionId
     ? championById.get(activeChampionId) ?? null
     : null;
 
-  const phaseTimeLeft = champSelectSession?.timer?.adjustedTimeLeftInPhase;
+  const rawPhaseTimeLeft = Number(champSelectSession?.timer?.adjustedTimeLeftInPhase);
+  const phaseTimeLeft =
+    isChampSelectActive && Number.isFinite(rawPhaseTimeLeft)
+      ? Math.max(0, rawPhaseTimeLeft - sinceOverview)
+      : rawPhaseTimeLeft;
   const phaseTotalTime = champSelectSession?.timer?.totalTimeInPhase;
   const numericPhaseTimeLeft = Number(phaseTimeLeft);
   const numericPhaseTotalTime = Number(phaseTotalTime);
@@ -543,13 +702,13 @@ export function useLeagueClient() {
         setActionStatus("Sandbox: hovering champion");
         return;
       }
-      if (!localAction) {
-        setActionStatus("Wait for your turn to pick");
+      if (!hoverAction) {
+        setActionStatus("You can't declare a champion in this phase");
         return;
       }
       try {
         setActionStatus("Hovering champion...");
-        const overview = await window.bonkClient.champSelectAction(localAction.id, {
+        const overview = await window.bonkClient.champSelectAction(hoverAction.id, {
           championId,
           completed: false,
         });
@@ -561,13 +720,15 @@ export function useLeagueClient() {
         setActionStatus("Could not hover champion");
       }
     },
-    [localAction],
+    [hoverAction],
   );
 
   // Lock In / Ban — completes the current action.
   const lockInChampion = useCallback(async () => {
-    if (!localAction || !activeChampionId) {
-      setActionStatus("Select a champion first");
+    if (!completableAction || !activeChampionId) {
+      setActionStatus(
+        activeChampionId ? "Wait for your turn to lock in" : "Select a champion first",
+      );
       return;
     }
     if (sandboxRef.current) {
@@ -588,7 +749,7 @@ export function useLeagueClient() {
               ),
               actions: (session.actions ?? []).map((group) =>
                 group.map((action) =>
-                  action.id === localAction.id
+                  action.id === completableAction.id
                     ? { ...action, championId: activeChampionId, completed: true, isInProgress: false }
                     : action,
                 ),
@@ -602,7 +763,7 @@ export function useLeagueClient() {
     }
     try {
       setActionStatus(localActionType === "ban" ? "Locking ban..." : "Locking pick...");
-      const overview = await window.bonkClient.champSelectAction(localAction.id, {
+      const overview = await window.bonkClient.champSelectAction(completableAction.id, {
         championId: activeChampionId,
         completed: true,
       });
@@ -613,7 +774,7 @@ export function useLeagueClient() {
       console.error(error);
       setActionStatus("Champ select action failed");
     }
-  }, [activeChampionId, localAction, localActionType]);
+  }, [activeChampionId, completableAction, localActionType]);
 
   // Push role preferences to the live lobby (Rift draft/ranked only — other
   // queues have no positions and reject this, which we surface gently).
@@ -691,6 +852,41 @@ export function useLeagueClient() {
     }
   }, []);
 
+  const setSkin = useCallback(async (selectedSkinId: number) => {
+    if (sandboxRef.current) {
+      setLeagueOverview((previous) => {
+        if (!previous?.champSelect) return previous;
+        const session = previous.champSelect.session;
+        return {
+          ...previous,
+          champSelect: {
+            ...previous.champSelect,
+            session: {
+              ...session,
+              myTeam: (session.myTeam ?? []).map((player) =>
+                player.cellId === session.localPlayerCellId
+                  ? { ...player, selectedSkinId }
+                  : player,
+              ),
+            },
+          },
+        };
+      });
+      setActionStatus("Sandbox: skin selected");
+      return;
+    }
+    try {
+      setActionStatus("Selecting skin...");
+      const overview = await window.bonkClient.setSkin(selectedSkinId);
+      setLeagueOverview(overview);
+      setLeagueClientStatus(overview.status);
+      setActionStatus("Skin selected");
+    } catch (error) {
+      console.error(error);
+      setActionStatus("Could not select skin");
+    }
+  }, []);
+
   const setSummonerSpells = useCallback(
     async (spell1Id: number, spell2Id: number) => {
       if (sandboxRef.current) {
@@ -743,6 +939,123 @@ export function useLeagueClient() {
     } catch (error) {
       console.error(error);
       setActionStatus("Could not apply rune page");
+    }
+  }, []);
+
+  const saveRunePage = useCallback(async (page: LeagueRunePage) => {
+    if (sandboxRef.current) {
+      setActionStatus("Sandbox: rune page saved (preview only)");
+      return;
+    }
+    try {
+      setActionStatus("Saving rune page...");
+      const overview = await window.bonkClient.saveRunePage(page);
+      setLeagueOverview(overview);
+      setLeagueClientStatus(overview.status);
+      setActionStatus("Rune page saved");
+    } catch (error) {
+      console.error(error);
+      setActionStatus("Could not save rune page");
+    }
+  }, []);
+
+  const loadMatchDetail = useCallback(
+    async (gameId: number) => {
+      setMatchDetails((previous) => {
+        if (previous[gameId] && previous[gameId] !== "error") return previous;
+        return { ...previous, [gameId]: "loading" };
+      });
+      try {
+        const detail = await window.bonkClient.getMatchDetail(gameId);
+        setMatchDetails((previous) => ({
+          ...previous,
+          [gameId]: detail ?? "error",
+        }));
+      } catch (error) {
+        console.error(error);
+        setMatchDetails((previous) => ({ ...previous, [gameId]: "error" }));
+      }
+    },
+    [],
+  );
+
+  const loadStore = useCallback(async () => {
+    setStoreLoading(true);
+    try {
+      const data = await window.bonkClient.getStore();
+      setStore(data);
+    } catch (error) {
+      console.error(error);
+      setActionStatus("Could not load store");
+    } finally {
+      setStoreLoading(false);
+    }
+  }, []);
+
+  const loadProfile = useCallback(async () => {
+    setProfileLoading(true);
+    try {
+      const data = await window.bonkClient.getProfile();
+      setProfile(data);
+      profileLoadedRef.current = true;
+    } catch (error) {
+      console.error(error);
+      setActionStatus("Could not load profile");
+    } finally {
+      setProfileLoading(false);
+    }
+  }, []);
+
+  const honorPlayer = useCallback(
+    async (summonerId: number) => {
+      // Hide the ballot immediately so it doesn't flicker while the call lands.
+      setDismissedBallotGameId(honorBallot?.gameId ?? -1);
+      try {
+        setActionStatus(summonerId > 0 ? "Honoring teammate..." : "Skipping honor...");
+        const overview = await window.bonkClient.honorPlayer(summonerId);
+        setLeagueOverview(overview);
+        setLeagueClientStatus(overview.status);
+        setActionStatus(summonerId > 0 ? "Honor sent" : "Honor skipped");
+      } catch (error) {
+        console.error(error);
+        setActionStatus("Could not send honor");
+      }
+    },
+    [honorBallot?.gameId],
+  );
+
+  const setProfileIcon = useCallback(
+    async (iconId: number) => {
+      try {
+        setActionStatus("Updating profile icon...");
+        const overview = await window.bonkClient.setProfileIcon(iconId);
+        setLeagueOverview(overview);
+        setLeagueClientStatus(overview.status);
+        setActionStatus("Profile icon updated");
+        // Reflect the new icon in the loaded profile too.
+        setProfile((previous) =>
+          previous?.summoner
+            ? { ...previous, summoner: { ...previous.summoner, profileIconId: iconId } }
+            : previous,
+        );
+      } catch (error) {
+        console.error(error);
+        setActionStatus("Could not update profile icon");
+      }
+    },
+    [],
+  );
+
+  const loadCollection = useCallback(async () => {
+    setCollectionLoading(true);
+    try {
+      const data = await window.bonkClient.getCollection();
+      setCollection(data);
+    } catch (error) {
+      console.error(error);
+      setActionStatus("Could not load collection");
+    } finally {
+      setCollectionLoading(false);
     }
   }, []);
 
@@ -802,6 +1115,32 @@ export function useLeagueClient() {
     setSelectedChampionId(null);
     setLeagueOverview(createSandboxOverview());
     setActionStatus("Sandbox: champion select");
+    // Pull real rune trees + perk pictures from League (if it's open) so the
+    // rune editor renders with real data instead of placeholders.
+    window.bonkClient
+      .getRuneData()
+      .then((data) => {
+        if (!sandboxRef.current || !data) return;
+        setLeagueOverview((previous) => {
+          if (!previous?.champSelect) return previous;
+          return {
+            ...previous,
+            champSelect: {
+              ...previous.champSelect,
+              perkStyles: data.perkStyles?.length
+                ? data.perkStyles
+                : previous.champSelect.perkStyles,
+              perks: data.perks?.length ? data.perks : previous.champSelect.perks,
+              summonerSpells: data.summonerSpells?.length
+                ? data.summonerSpells
+                : previous.champSelect.summonerSpells,
+            },
+          };
+        });
+      })
+      .catch(() => {
+        // League not open — keep the placeholder data.
+      });
   }, []);
 
   const exitSandbox = useCallback(() => {
@@ -858,11 +1197,61 @@ export function useLeagueClient() {
     if (!isInMatchmaking && queueStartedAt !== null) setQueueStartedAt(null);
   }, [isInMatchmaking, queueStartedAt]);
 
+  // Record when each overview arrives so timers can interpolate from it.
   useEffect(() => {
-    if (!isInMatchmaking) return undefined;
-    const intervalId = window.setInterval(() => setClockNow(Date.now()), 1000);
+    overviewAtRef.current = Date.now();
+    setClockNow(Date.now());
+  }, [leagueOverview]);
+
+  // When a match ends (gameflow leaves the in-game phases), auto-refresh the
+  // ranked + profile data so LP / match history update without a manual pull.
+  useEffect(() => {
+    const prev = prevPhaseRef.current;
+    prevPhaseRef.current = gameflowPhase;
+    if (!gameflowPhase || prev === gameflowPhase) return;
+    const leftGame =
+      prev != null && GAME_ACTIVE_PHASES.includes(prev) && !GAME_ACTIVE_PHASES.includes(gameflowPhase);
+    if (leftGame) {
+      void loadRankedProfile();
+      if (profileLoadedRef.current) void loadProfile();
+    }
+  }, [gameflowPhase, loadRankedProfile, loadProfile]);
+
+  // Pull the real position preferences set in the League lobby into the role
+  // selector — on load and whenever they change in the client.
+  useEffect(() => {
+    const first = localLobbyMember?.firstPositionPreference;
+    const second = localLobbyMember?.secondPositionPreference;
+
+    if (!localLobbyMember) {
+      syncedFirstPrefRef.current = null;
+      syncedSecondPrefRef.current = null;
+      return;
+    }
+    if (first && first !== syncedFirstPrefRef.current) {
+      syncedFirstPrefRef.current = first;
+      const role = POSITION_TO_ROLE[String(first).toUpperCase()];
+      if (role) setSelectedRole(role);
+    }
+    if (second && second !== syncedSecondPrefRef.current) {
+      syncedSecondPrefRef.current = second;
+      const role = POSITION_TO_ROLE[String(second).toUpperCase()];
+      if (role) setSelectedSecondaryRole(role);
+    }
+  }, [
+    localLobbyMember,
+    localLobbyMember?.firstPositionPreference,
+    localLobbyMember?.secondPositionPreference,
+  ]);
+
+  // Fast local tick so timers move smoothly between the 2s polls.
+  useEffect(() => {
+    const needsTick =
+      isInMatchmaking || isReadyCheckActive || isChampSelectActive || penaltySecondsRemaining > 0;
+    if (!needsTick) return undefined;
+    const intervalId = window.setInterval(() => setClockNow(Date.now()), 200);
     return () => window.clearInterval(intervalId);
-  }, [isInMatchmaking]);
+  }, [isInMatchmaking, isReadyCheckActive, isChampSelectActive, penaltySecondsRemaining]);
 
   useEffect(() => {
     if (!autoAccept || !canRespondToReadyCheck || autoAcceptingRef.current) return;
@@ -938,6 +1327,8 @@ export function useLeagueClient() {
     findKnownQueue,
     isInMatchmaking,
     queueElapsedLabel,
+    queueRestriction,
+    penaltySecondsRemaining,
 
     // ready check
     readyCheck,
@@ -953,12 +1344,13 @@ export function useLeagueClient() {
     localAction,
     localActionType,
     localActions,
+    canLock,
     activeChampionId,
     selectedChampionId,
     setSelectedChampionId,
     selectedChampion,
     championById,
-    availableChampionSet,
+    takenChampionIds,
     bannedChampionIds,
     phaseTimeLeft,
     phaseProgress,
@@ -966,6 +1358,8 @@ export function useLeagueClient() {
     localSpell2Id,
     summonerSpells,
     recommendedRunePages,
+    skinCarousel,
+    localSelectedSkinId,
 
     // friends
     getFriends,
@@ -982,7 +1376,9 @@ export function useLeagueClient() {
     lockInChampion,
     selectRunePage,
     setSummonerSpells,
+    setSkin,
     applyRunePage,
+    saveRunePage,
     acceptReadyCheck,
     declineReadyCheck,
     exitApp,
@@ -990,5 +1386,21 @@ export function useLeagueClient() {
     sandbox,
     enterSandbox,
     exitSandbox,
+    collection,
+    collectionLoading,
+    loadCollection,
+    profile,
+    profileLoading,
+    loadProfile,
+    setProfileIcon,
+    matchDetails,
+    loadMatchDetail,
+    store,
+    storeLoading,
+    loadStore,
+    gameflowPhase,
+    honorBallot: activeHonorBallot,
+    honorPlayer,
+    currentSummoner: leagueOverview?.currentSummoner ?? null,
   };
 }

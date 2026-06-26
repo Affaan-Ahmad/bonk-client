@@ -12,7 +12,7 @@ export function ChampionGrid({
   search,
   onSearchChange,
   activeChampionId,
-  availableChampionSet,
+  takenChampionIds,
   bannedChampionIds,
   isBanPhase,
   onPick,
@@ -22,7 +22,7 @@ export function ChampionGrid({
   search: string;
   onSearchChange: (value: string) => void;
   activeChampionId: number | null;
-  availableChampionSet: Set<number>;
+  takenChampionIds: Set<number>;
   bannedChampionIds: Set<number>;
   isBanPhase: boolean;
   onPick: (championId: number) => void;
@@ -76,10 +76,10 @@ export function ChampionGrid({
           <div className="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-2 pr-2">
             {champions.map((champion) => {
               const banned = bannedChampionIds.has(champion.id);
-              const unavailable =
-                banned ||
-                (availableChampionSet.size > 0 &&
-                  !availableChampionSet.has(champion.id));
+              const taken = takenChampionIds.has(champion.id);
+              // During the ban phase a banned champ can't be re-banned; during the
+              // pick phase you can't pick a banned or already-taken champion.
+              const unavailable = isBanPhase ? banned : banned || taken;
               const selected = activeChampionId === champion.id;
 
               return (
